@@ -21,6 +21,7 @@
 #define MEMORY_WARNINGS_FILE_NAME @"MemoryWarnings.dat"
 
 static const int kBytesPerMB = (1 << 20);
+static BOOL shouldAllocateMore = YES;
 
 double currentTime() { return [[NSDate date] timeIntervalSince1970]; }
 
@@ -53,6 +54,7 @@ int systemMemoryLevel()
     Byte *p[10000];
     uint64_t physicalMemorySize;
     uint64_t userMemorySize;
+    uint64_t memory_footprint;
     
     NSMutableArray *infoLabels;
     NSMutableArray *memoryWarnings;
@@ -99,6 +101,29 @@ int systemMemoryLevel()
     self.alocatedMemoryBar.frame = rect;
 }
 
+
+- (int64_t)memoryFootprint
+{
+    task_vm_info_data_t vmInfo;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    kern_return_t result = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vmInfo, &count);
+    if (result != KERN_SUCCESS)
+        return 0;
+    
+    return (count == TASK_VM_INFO_COUNT) ? static_cast<uint64_t>(vmInfo.phys_footprint) : 0;
+}
+
+- (int64_t)memoryFootprintEarlyIOS //earlier than iOS 9.0
+{
+    task_vm_info_data_t vmInfo;
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    kern_return_t result = task_info(mach_task_self(), TASK_VM_INFO, (task_info_t) &vmInfo, &count);
+    if (result != KERN_SUCCESS)
+        return 0;
+    
+    return static_cast<uint64_t>(vmInfo.internal + vmInfo.compressed);
+}
+
 - (void)refreshMemoryInfo {
     
     // Get memory info
@@ -138,10 +163,10 @@ int systemMemoryLevel()
     }
     
     
-    struct task_basic_info info;
-    mach_msg_type_number_t size = sizeof(info);
-    
-    task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &size);
+//    struct task_basic_info info;
+//    mach_msg_type_number_t size = sizeof(info);
+//    
+//    task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &size);
     
     struct mach_task_basic_info info2;
     mach_msg_type_number_t size2 = sizeof(info2);
@@ -150,9 +175,10 @@ int systemMemoryLevel()
     NSLog(@"memLevel: %3d, alloc: %4lldM; "
           @"MemTotal:%lld, UserModeMem:%lld, "
           @"VMUsed:%lld, "
-          @"ResidentUsed:%lld, "
-          @"ResidentUsed2:%lld, "
-          @"ResidentUsedMax:%lld, "
+          @"Resident2:%lld, "
+          @"ResidentMax:%lld, "
+          @"FootPrint:%lld, "
+          @"FootPrint2:%lld, "
           @"MemUsed:%lld, "
           @"MemFree64:%lld, "
           @"active:%lld, inactive:%lld, wire:%lld,"
@@ -161,15 +187,16 @@ int systemMemoryLevel()
           (uint64_t)physicalMemorySize >> 20,
           (uint64_t)userMemorySize >> 20,
           (uint64_t)[SystemMemoryObserver currentVirtualSize],
-          (int64_t)info.resident_size >> 20,
           (uint64_t)info2.resident_size >> 20,
           (uint64_t)info2.resident_size_max >> 20,
+          (uint64_t)[self memoryFootprint] >> 20,
+          (uint64_t)[self memoryFootprintEarlyIOS] >> 20,
           (uint64_t)used_memory >> 20,
           (uint64_t)free_memory_64 >> 20,
           ((int64_t)vm_stats.active_count * (int64_t)page_size) >> 20,
           ((int64_t)vm_stats.inactive_count * (int64_t)page_size) >> 20,
           ((int64_t)vm_stats.wire_count * (int64_t)page_size) >> 20,
-          (info.resident_size + info.virtual_size) * 100 / physicalMemorySize);
+          (info2.resident_size + info2.virtual_size) * 100 / physicalMemorySize);
     
 //    if(info.resident_size/1024/1024 + 30 < allocatedMB)
 //    {
@@ -181,6 +208,11 @@ int systemMemoryLevel()
 }
 
 - (void)allocateMemory {
+    
+//    if(!shouldAllocateMore)
+//    {
+//        return;
+//    }
     
     p[allocatedMB] = (Byte*)malloc(kBytesPerMB);
     memset(p[allocatedMB], allocatedMB % 0xff, kBytesPerMB);
@@ -309,8 +341,9 @@ int systemMemoryLevel()
 
 - (void)didReceiveMemoryWarning
 {
-    NSLog(@"=========== MemoryWarning =======@");
     [super didReceiveMemoryWarning];
+ 
+    NSLog(@"=========== didReceiveMemoryWarning ========");
     
     firstMemoryWarningReceived = YES;
     
@@ -340,7 +373,9 @@ int systemMemoryLevel()
 
 - (void)onMemoryWarningWithStatus:(unsigned long)status
 {
-    NSLog(@"Recv Memory Status : %@", @(status));
+    NSLog(@"******************** Recv Memory Status : %@", @(status));
+    shouldAllocateMore = NO;
+    
 }
 
 #pragma mark - Actions
